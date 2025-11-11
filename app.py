@@ -6,7 +6,8 @@ from bs4 import BeautifulSoup
 
 # ================== KONFIGURASI ==================
 st.set_page_config(page_title="PSEKP ChatBot", layout="centered")
-st.title("Selamat datang di **PSEKP ChatBot** 🤖")
+st.title("Selamat datang di")
+st.title("**PSEKP ChatBot** 🤖")
 st.caption("Jawaban berbasis Data Kepegawaian & Website resmi PSEKP.")
 st.caption("Powered by OpenRouter")
 
@@ -262,6 +263,7 @@ if query:
             st.code(context_block)
     except Exception as e:
         st.error(f"Gagal memanggil model: {e}")
+
 
 
 
