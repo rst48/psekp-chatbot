@@ -157,11 +157,6 @@ def ask_openrouter(prompt: str, temperature=0.7) -> str:
     return resp.json()["choices"][0]["message"]["content"]
 
 # ================== UI ==================
-urls_text = st.text_area(
-    "Sumber Website (otomatis sudah berisi situs PSEKP, bisa ditambah jika perlu)",
-    value="\n".join(DEFAULT_URLS),
-    height=100
-)
 query = st.text_input(
     "Tulis pertanyaan lalu tekan Enter",
     placeholder="contoh: 'Apa tugas dan fungsi PSEKP?', atau 'Jabatan Restu apa?'"
@@ -202,3 +197,4 @@ if query:
             st.code(context_block)
     except Exception as e:
         st.error(f"Gagal memanggil model: {e}")
+
