@@ -7,14 +7,14 @@ from bs4 import BeautifulSoup
 # ================== KONFIGURASI ==================
 st.set_page_config(page_title="PSEKP AI Chat", layout="centered")
 st.title("Selamat datang di **PSEKP AI Chat** 🤖")
-st.caption("Tanya apa saja seputar kepegawaian atau informasi tentang PSEKP")
+st.caption("Tanya apa saja seputar kepegawaian atau informasi PSEKP. Sumber: Excel & Website resmi PSEKP (OpenRouter).")
 
 DATA_XLSX = Path("data/kepegawaian.xlsx")
-MODEL_DEFAULT = "meta-llama/llama-3-8b-instruct"
-MAX_ROWS = 5
+MODEL_DEFAULT = "meta-llama/llama-3-8b-instruct"  # bisa override di Secrets: OPENROUTER_MODEL
+MAX_ROWS = 50       # dinaikkan agar hasil banyak tidak terpotong
 MAX_WEB_SNIPS = 3
 
-# ================== SUMBER WEBSITE DEFAULT ==================
+# Website default (TIDAK ditampilkan ke user)
 DEFAULT_URLS = [
     "https://psekp.setjen.pertanian.go.id/web/",
     "https://psekp.setjen.pertanian.go.id/web/?page_id=396",
@@ -29,7 +29,7 @@ if not DATA_XLSX.exists():
 try:
     df = pd.read_excel(DATA_XLSX, sheet_name="DATA", dtype=str)
 except ValueError:
-    st.error("❌ Sheet 'DATA' tidak ditemukan. Ubah nama sheet menjadi 'DATA'.")
+    st.error("❌ Sheet 'DATA' tidak ditemukan. Ubah nama sheet Excel menjadi 'DATA'.")
     st.stop()
 except Exception as e:
     st.error(f"❌ Gagal membaca Excel: {e}")
@@ -60,17 +60,21 @@ def score_text(text: str, toks):
     t = (text or '').lower()
     return sum(t.count(tok) for tok in toks)
 
-# ================== PILIH BARIS EXCEL ==================
+# ================== PILIH BARIS EXCEL (untuk konteks LLM) ==================
 def pick_rows_excel(question: str, limit=MAX_ROWS) -> pd.DataFrame:
     ql = (question or '').lower().strip()
     if not ql:
         return df.head(0)
+
+    # NIP lengkap
     full_nip = re.findall(r'\d{8,20}', ql)
     if full_nip:
         nip_series = df[COL["nip"]].astype(str).str.replace(r"\s", "", regex=True)
         pick = df[nip_series.isin(full_nip)]
         if not pick.empty:
             return pick.head(limit)
+
+    # Prefix NIP
     m = re.search(r"\b(\d{2,17})\b", ql)
     if m:
         prefix = m.group(1)
@@ -78,6 +82,8 @@ def pick_rows_excel(question: str, limit=MAX_ROWS) -> pd.DataFrame:
         pick = df[nip_series.str.startswith(prefix, na=False)]
         if not pick.empty:
             return pick.head(limit)
+
+    # Nama
     toks = tokens_from_query(ql)
     base = df[COL["nama"]].fillna("").str.lower()
     mask = pd.Series(False, index=df.index)
@@ -85,7 +91,13 @@ def pick_rows_excel(question: str, limit=MAX_ROWS) -> pd.DataFrame:
         mask = mask | base.str.contains(t)
     return df[mask].head(limit)
 
-# ================== WEBSITE ==================
+# ================== DAFTAR DETERMINISTIK UNTUK PREFIX NIP ==================
+def list_prefix_hits(prefix: str, limit: int = 200) -> pd.DataFrame:
+    nip_series = df[COL["nip"]].astype(str).str.replace(r"\s", "", regex=True)
+    hits = df[nip_series.str.startswith(prefix, na=False)].fillna("-")
+    return hits.head(limit)
+
+# ================== WEBSITE (tanpa tampilkan URL) ==================
 @st.cache_data(show_spinner=False, ttl=3600)
 def fetch_url_text(url: str) -> str:
     """Ambil teks dari website dan bersihkan HTML, disimpan cache 1 jam."""
@@ -115,12 +127,18 @@ def pick_snippets_web(question: str, urls: list, max_snips=MAX_WEB_SNIPS):
         scored = sorted(paras, key=lambda p: score_text(p, toks), reverse=True)
         for para in scored[:2]:
             if score_text(para, toks) > 0:
-                snips.append(para)
+                snips.append(para)  # TANPA URL/DOMAIN
     snips = sorted(snips, key=lambda x: score_text(x, toks), reverse=True)[:max_snips]
     return snips
 
-# ================== LLM (OpenRouter) ==================
-def ask_openrouter(prompt: str, temperature=0.7) -> str:
+# ================== LLM via OPENROUTER ==================
+def ask_openrouter(prompt: str, temperature=0.3) -> str:
+    """
+    Memanggil OpenRouter Chat Completions.
+    Gunakan Secrets:
+      - OPENROUTER_API_KEY
+      - (opsional) OPENROUTER_MODEL
+    """
     api_key = st.secrets.get("OPENROUTER_API_KEY", "").strip()
     if not api_key:
         raise KeyError("❌ OPENROUTER_API_KEY belum diisi di Secrets.")
@@ -134,11 +152,12 @@ def ask_openrouter(prompt: str, temperature=0.7) -> str:
 
     system_prompt = (
         "Kamu asisten kepegawaian PSEKP yang ramah dan profesional.\n"
-        "- Gunakan gaya bahasa alami seperti mengetik manual.\n"
-        "- Jawaban harus berdasarkan konteks dari Excel dan Website (tanpa menampilkan URL).\n"
+        "- Gaya bahasa alami seperti mengetik manual.\n"
+        "- Jawaban harus berdasarkan konteks (Excel dan Website) yang diberikan.\n"
         "- Tambahkan penanda sumber di akhir kalimat fakta: [Excel] atau [Web].\n"
+        "- Jika konteks berisi BANYAK pegawai, tampilkan SELURUHNYA sebagai daftar berpoin (jangan diringkas).\n"
         "- Jika data tidak memadai, jawab 'data tidak tersedia'.\n"
-        "- Hindari menyebut URL atau tautan secara eksplisit."
+        "- Jangan menampilkan URL/domain secara eksplisit."
     )
 
     payload = {
@@ -147,31 +166,45 @@ def ask_openrouter(prompt: str, temperature=0.7) -> str:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
         ],
-        "temperature": temperature,
+        "temperature": temperature,  # rendah supaya patuh format & lengkap
     }
 
     resp = requests.post(url, headers=headers, json=payload, timeout=60)
     if resp.status_code != 200:
         raise RuntimeError(f"Gagal: {resp.status_code} - {resp.text}")
-    return resp.json()["choices"][0]["message"]["content"]
+    data = resp.json()
+    return data["choices"][0]["message"]["content"]
 
 # ================== UI ==================
 query = st.text_input(
     "Tulis pertanyaan lalu tekan Enter",
-    placeholder="contoh: 'Apa tugas dan fungsi PSEKP?', atau 'Jabatan Eko Nugroho apa?'"
+    placeholder="contoh: 'Siapa saja yang NIP-nya diawali 1990?', atau 'Jabatan Restu apa?'"
 )
 
 if query:
-    # Ambil data Excel relevan
+    # A) Jika prefix NIP → tampilkan daftar deterministik (pasti lengkap)
+    prefix_match = re.fullmatch(r"\d{2,17}", query.strip())
+    if prefix_match:
+        pref = prefix_match.group(0)
+        hits = list_prefix_hits(pref, limit=200)
+        if hits.empty:
+            st.info(f"Tidak ada NIP yang diawali '{pref}'.")
+        else:
+            st.markdown(f"### Daftar NIP diawali '{pref}' (total {len(hits)})")
+            for _, r in hits.iterrows():
+                nama = r[COL["nama"]]
+                nip  = r[COL["nip"]]
+                jab  = (r.get(COL["jf"]) or r.get(COL["js"]) or "-")
+                st.write(f"- **{nama}** — NIP: `{nip}` — {jab} [Excel]")
+
+    # B) Siapkan konteks untuk LLM (tetap dijalankan untuk narasi & penjelasan tambahan)
     ctx_df = pick_rows_excel(query, limit=MAX_ROWS)[
         [COL["nip"], COL["nama"], COL["jf"], COL["js"], COL["gol"], COL["pang"], COL["tmtj"], COL["tmtg"], COL["email"], COL["hp"]]
     ].fillna("-")
     ctx_csv = ctx_df.to_csv(index=False)
 
-    # Ambil data dari web
     web_snips = pick_snippets_web(query, DEFAULT_URLS, MAX_WEB_SNIPS)
 
-    # Satukan konteks
     parts = []
     if not ctx_df.empty:
         parts.append("Sumber: [Excel]\n" + ctx_csv)
@@ -179,16 +212,20 @@ if query:
         parts.append("Sumber: [Web]\n" + para)
 
     context_block = "\n\n---\n\n".join(parts) if parts else "(KONTEKS KOSONG)"
+
+    # C) Prompt LLM — paksa enumerasi lengkap jika ada banyak pegawai
     prompt = (
-        "Gunakan gaya bahasa alami seperti mengetik manual. "
-        "Saat menulis fakta, tambahkan penanda sumber sesuai konteks (hanya [Excel] atau [Web]).\n\n"
-        f"KONTEKS TERKURASI (boleh mengacu, jangan tampilkan mentah):\n{context_block}\n\n"
+        "Gunakan gaya bahasa alami seperti mengetik manual.\n"
+        "Jika konteks berisi BANYAK pegawai, TAMPILKAN SEMUANYA sebagai daftar berpoin: "
+        "Nama — NIP — Jabatan (JF lalu JS jika JF kosong). Setiap poin beri tag [Excel].\n"
+        "Setelah daftar (jika ada), boleh tambah ringkasan singkat.\n\n"
+        f"KONTEKS TERKURASI (jangan tampilkan mentah):\n{context_block}\n\n"
         f"PERTANYAAN:\n{query}"
     )
 
     try:
-        with st.spinner("💬 Menyusun jawaban dari Excel & Website..."):
-            answer = ask_openrouter(prompt, temperature=0.75)
+        with st.spinner("💬 Menyusun jawaban (Excel & Website)..."):
+            answer = ask_openrouter(prompt, temperature=0.3)
         st.success("Jawaban:")
         st.write(answer if answer else "data tidak tersedia")
 
