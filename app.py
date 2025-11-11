@@ -1,11 +1,11 @@
 import pandas as pd
 import streamlit as st
-import re, json
+import re
 from pathlib import Path
 
 st.set_page_config(page_title="PSEKP AI Chat", layout="centered")
 st.title("Selamat datang di **PSEKP AI Chat**")
-st.caption("Apa yang mau kamu tanya hari ini tentang PSEKP? (contoh: 'jabatan restu apa?', '1994 siapa saja?')")
+st.caption("Apa yang mau kamu tanya hari ini tentang PSEKP? (contoh: 'jabatan restu apa?' atau '1994 siapa saja?')")
 
 # ================== BACA DATA DARI REPO ==================
 DATA_PATH = Path("data/kepegawaian.xlsx")
@@ -40,7 +40,7 @@ if missing:
     st.error(f"Kolom berikut belum ada di Excel: {missing}")
     st.stop()
 
-# ================== AMBIL BARIS KONTEKS ==================
+# ================== PILIH BARIS KONTEKS ==================
 def pick_rows(question: str, limit: int = 5) -> pd.DataFrame:
     """Ambil baris relevan berdasarkan NIP (persis/prefix) atau token nama."""
     ql = (question or "").lower().strip()
@@ -74,16 +74,28 @@ def pick_rows(question: str, limit: int = 5) -> pd.DataFrame:
         maskname = maskname | base.str.contains(t)
     return df[maskname].head(limit)
 
-# ================== GEMINI: PICKER ANTI-404 ==================
-def pick_gemini_model_id():
+# ================== GEMINI: TRY-AND-FALLBACK ==================
+def ask_gemini(question: str, ctx_csv: str) -> str:
     """
-    Ambil model yang mendukung generateContent dari API key ini.
-    Mengembalikan nama yang valid (bisa 'models/xxx' atau 'xxx').
+    Panggil Gemini dengan mencoba beberapa nama model berurutan sampai berhasil.
+    Bisa dioverride dengan Secrets: GEMINI_MODEL.
     """
     import google.generativeai as genai
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
-    prefer = (
+    try:
+        api_key = st.secrets["GEMINI_API_KEY"]
+    except KeyError:
+        raise KeyError("GEMINI_API_KEY belum diisi di Streamlit Secrets.")
+
+    genai.configure(api_key=api_key)
+
+    # Urutan kandidat model. Termasuk format dengan dan tanpa prefix 'models/'.
+    override = st.secrets.get("GEMINI_MODEL", "").strip() if "GEMINI_MODEL" in st.secrets else ""
+    candidates = []
+    if override:
+        # kalau ada override, coba itu paling pertama (kedua-dua bentuk)
+        candidates.extend([override, f"models/{override}" if not override.startswith("models/") else override])
+    candidates.extend([
         "models/gemini-1.5-flash-latest",
         "models/gemini-1.5-pro-latest",
         "models/gemini-1.5-flash",
@@ -94,46 +106,32 @@ def pick_gemini_model_id():
         "gemini-1.5-flash",
         "gemini-1.5-pro",
         "gemini-1.0-pro",
-    )
+        "gemini-pro",  # beberapa akun lama masih punya ini
+    ])
 
-    available = set()
-    try:
-        for m in genai.list_models():
-            name = getattr(m, "name", "")
-            methods = getattr(m, "supported_generation_methods", []) or []
-            if "generateContent" in methods:
-                available.add(name)  # biasanya "models/xxx"
-                if name.startswith("models/"):
-                    available.add(name.split("/", 1)[1])  # simpan juga versi tanpa prefix
-    except Exception as e:
-        st.warning(f"Tidak bisa membaca daftar model: {e}")
-        return None
-
-    for want in prefer:
-        if want in available:
-            return want
-    return None
-
-def ask_gemini(question: str, ctx_csv: str) -> str:
-    """Tanya Gemini dengan konteks CSV (jawab hanya berdasar data)."""
-    import google.generativeai as genai
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-
-    model_id = pick_gemini_model_id()
-    if not model_id:
-        raise RuntimeError(
-            "Tidak menemukan model Gemini yang mendukung generateContent untuk API key ini."
-        )
-
-    model = genai.GenerativeModel(model_id)
     system = (
         "Kamu asisten kepegawaian PSEKP. Jawab HANYA berdasarkan DATA (CSV) berikut. "
         "Jika info tidak ada di data, jawab: 'data tidak tersedia'. "
         "Jawab ringkas dan rapi; sebutkan NIP/Nama jika relevan."
     )
     prompt = f"{system}\n\nDATA (CSV):\n{ctx_csv}\n\nPERTANYAAN:\n{question}"
-    resp = model.generate_content(prompt)
-    return (resp.text or "").strip()
+
+    last_err = None
+    for model_id in candidates:
+        try:
+            model = genai.GenerativeModel(model_id)
+            resp = model.generate_content(prompt)
+            return (resp.text or "").strip()
+        except Exception as e:
+            # simpan error, lanjut coba model berikutnya
+            last_err = e
+            continue
+
+    # kalau semua gagal:
+    raise RuntimeError(
+        "Tidak menemukan model Gemini yang dapat dipakai dengan API key ini. "
+        f"Error terakhir: {last_err}"
+    )
 
 # ================== UI: SATU FIELD PERTANYAAN ==================
 query = st.text_input(
@@ -154,14 +152,10 @@ if query:
         st.write(answer if answer else "data tidak tersedia")
         with st.expander("Lihat konteks (CSV)"):
             st.code(ctx_csv, language="csv")
-    except KeyError:
-        st.error("GEMINI_API_KEY belum diisi di Streamlit Secrets.")
-    except ModuleNotFoundError:
-        st.error("Paket `google-generativeai` belum terpasang. Tambahkan di requirements.txt lalu deploy ulang.")
     except Exception as e:
         st.error(f"Gagal memanggil Gemini: {e}")
 
-# ================== DEBUG: LIHAT MODEL YANG TERSEDIA ==================
+# ================== DEBUG: LIST MODEL (opsional) ==================
 with st.expander("Debug model Gemini (opsional)"):
     try:
         import google.generativeai as genai
