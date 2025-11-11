@@ -6,7 +6,6 @@ from bs4 import BeautifulSoup
 
 # ================== KONFIGURASI ==================
 st.set_page_config(page_title="PSEKP ChatBot", layout="centered")
-st.title("Selamat datang di")
 st.title("**PSEKP ChatBot** 🤖")
 st.caption("Jawaban berbasis Data Kepegawaian & Website resmi PSEKP.")
 st.caption("Powered by OpenRouter")
@@ -203,6 +202,40 @@ def is_org_question(q: str) -> bool:
     ql = (q or "").lower()
     return any(k in ql for k in ORG_KEYWORDS)
 
+# ================== INTRO SENA ==================
+import time
+
+if "sena_intro_done" not in st.session_state:
+    st.session_state.sena_intro_done = False
+
+def typewriter(container, text, delay=0.05, style="###"):
+    """Menampilkan teks huruf demi huruf seperti efek mengetik."""
+    typed = ""
+    for char in text:
+        typed += char
+        container.markdown(f"{style} {typed}")
+        time.sleep(delay)
+
+if not st.session_state.sena_intro_done:
+    st.markdown("### 🤖")
+    container1 = st.empty()
+    container2 = st.empty()
+
+    # Teks intro
+    intro_line1 = "Hai, saya **SENA** 👋"
+    intro_line2 = "Asisten Cerdas Kepegawaian PSEKP 🌾"
+
+    # Efek mengetik baris pertama
+    typewriter(container1, intro_line1, delay=0.05, style="###")
+
+    time.sleep(0.8)  # jeda sebelum baris kedua
+
+    # Efek mengetik baris kedua
+    typewriter(container2, intro_line2, delay=0.05, style="#####")
+
+    st.session_state.sena_intro_done = True
+    st.markdown("---")
+
 query = st.text_input(
     "Tulis pertanyaan lalu tekan Enter",
     placeholder="contoh: 'Apa tugas PSEKP?', 'Siapa Restu?', 'NIP Frilla?'"
@@ -263,6 +296,7 @@ if query:
             st.code(context_block)
     except Exception as e:
         st.error(f"Gagal memanggil model: {e}")
+
 
 
 
