@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 # ================== KONFIGURASI ==================
 st.set_page_config(page_title="PSEKP AI Chat", layout="centered")
 st.title("Selamat datang di **PSEKP AI Chat** 🤖")
-st.caption("Tanya apa saja seputar kepegawaian atau informasi tentang PSEKP. Sumber data: Excel & website resmi PSEKP (tanpa menampilkan URL).")
+st.caption("Tanya apa saja seputar kepegawaian atau informasi tentang PSEKP")
 
 DATA_XLSX = Path("data/kepegawaian.xlsx")
 MODEL_DEFAULT = "meta-llama/llama-3-8b-instruct"
@@ -196,3 +196,4 @@ if query:
             st.code(context_block)
     except Exception as e:
         st.error(f"Gagal memanggil model: {e}")
+
