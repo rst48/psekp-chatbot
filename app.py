@@ -152,26 +152,29 @@ time.sleep(0.6)
 typewriter(c2, "Ada yang mau kamu ketahui tentang PSEKP dan Kepegawaiannya?", delay=0.05, style="#####")
 st.markdown("---")
 
-# ================== INPUT CHAT DENGAN TOMBOL HIJAU BULAT ==================
-st.markdown("""
+# ================== INPUT CHAT DENGAN TOMBOL PANAH HIJAU BULAT ==================
+import streamlit.components.v1 as components
+
+user_input = components.html("""
 <style>
-.chat-input-container {
+.chat-box {
     position: relative;
     width: 100%;
 }
 .chat-input {
     width: 100%;
-    padding: 12px 50px 12px 15px;
+    padding: 12px 48px 12px 15px;
     border-radius: 25px;
     border: 1px solid #ccc;
     font-size: 16px;
     outline: none;
+    box-sizing: border-box;
 }
 .chat-input:focus {
     border-color: #22c55e;
     box-shadow: 0 0 0 1px #22c55e;
 }
-.send-button {
+.send-btn {
     position: absolute;
     right: 8px;
     top: 50%;
@@ -180,94 +183,48 @@ st.markdown("""
     color: white;
     border: none;
     border-radius: 50%;
-    width: 38px;
-    height: 38px;
+    width: 36px;
+    height: 36px;
     font-size: 18px;
     cursor: pointer;
-    transition: all 0.2s ease-in-out;
+    transition: all 0.2s ease;
 }
-.send-button:hover {
+.send-btn:hover {
     background-color: #16a34a;
     transform: translateY(-50%) scale(1.05);
 }
 </style>
 
-<div class="chat-input-container">
-  <input id="user_input" class="chat-input" placeholder="contoh: 'Apa tugas PSEKP?', 'Siapa Restu?', 'NIP Frilla?'" />
-  <button class="send-button" onclick="sendMessage()">↑</button>
+<div class="chat-box">
+  <input type="text" id="chatInput" class="chat-input"
+         placeholder="contoh: 'Apa tugas PSEKP?', 'Siapa Restu?', 'NIP Frilla?'" 
+         onkeydown="if(event.key==='Enter'){sendMessage();}" />
+  <button class="send-btn" onclick="sendMessage()">↑</button>
 </div>
 
 <script>
 function sendMessage() {
-    const input = document.getElementById('user_input');
-    if (input.value.trim() !== '') {
-        window.parent.postMessage({type: 'streamlit:setComponentValue', value: input.value}, '*');
-        input.value = '';
-    }
+  const val = document.getElementById('chatInput').value;
+  if (val.trim() !== '') {
+    const streamlitEvent = new CustomEvent("streamlit:sendMessage", { detail: val });
+    window.parent.document.dispatchEvent(streamlitEvent);
+    document.getElementById('chatInput').value = '';
+  }
 }
 </script>
-""", unsafe_allow_html=True)
+""", height=70)
 
-# Ambil input dari komponen HTML di atas
-query = st.text_input("Tuliskan pertanyaanmu:", label_visibility="collapsed", key="query_hidden")
-# ================== INPUT CHAT DENGAN TOMBOL HIJAU BULAT ==================
-st.markdown("""
-<style>
-.chat-input-container {
-    position: relative;
-    width: 100%;
-}
-.chat-input {
-    width: 100%;
-    padding: 12px 50px 12px 15px;
-    border-radius: 25px;
-    border: 1px solid #ccc;
-    font-size: 16px;
-    outline: none;
-}
-.chat-input:focus {
-    border-color: #22c55e;
-    box-shadow: 0 0 0 1px #22c55e;
-}
-.send-button {
-    position: absolute;
-    right: 8px;
-    top: 50%;
-    transform: translateY(-50%);
-    background-color: #22c55e;
-    color: white;
-    border: none;
-    border-radius: 50%;
-    width: 38px;
-    height: 38px;
-    font-size: 18px;
-    cursor: pointer;
-    transition: all 0.2s ease-in-out;
-}
-.send-button:hover {
-    background-color: #16a34a;
-    transform: translateY(-50%) scale(1.05);
-}
-</style>
+# Tambahkan listener untuk menerima event dari komponen HTML di atas
+if "query" not in st.session_state:
+    st.session_state.query = ""
 
-<div class="chat-input-container">
-  <input id="user_input" class="chat-input" placeholder="contoh: 'Apa tugas PSEKP?', 'Siapa Restu?', 'NIP Frilla?'" />
-  <button class="send-button" onclick="sendMessage()">↑</button>
-</div>
+import streamlit.runtime.scriptrunner as stsr
+ctx = stsr.get_script_run_ctx()
+if ctx is not None:
+    from streamlit.web.server.websocket_headers import _get_websocket_headers
+    _get_websocket_headers()
 
-<script>
-function sendMessage() {
-    const input = document.getElementById('user_input');
-    if (input.value.trim() !== '') {
-        window.parent.postMessage({type: 'streamlit:setComponentValue', value: input.value}, '*');
-        input.value = '';
-    }
-}
-</script>
-""", unsafe_allow_html=True)
-
-# Ambil input dari komponen HTML di atas
-query = st.text_input("Tuliskan pertanyaanmu:", label_visibility="collapsed", key="query_hidden")
+query = st.session_state.query
 
 
 # ================== PROSES JAWABAN ==================
@@ -311,4 +268,5 @@ if "submitted_query" in st.session_state:
             st.code(context_block)
     except Exception as e:
         st.error(f"Gagal memanggil model: {e}")
+
 
