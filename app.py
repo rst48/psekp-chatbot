@@ -54,47 +54,74 @@ if missing:
 
 # ================== UTIL PENCARIAN (untuk memilih konteks Excel) ==================
 def tokens_from_query(q: str):
-    return [t for t in re.split(r"[^a-zA-Z0-9]+", (q or '').lower()) if len(t) >= 3]
+    """
+    Ambil token alfanumerik (>=3 huruf/angka) dalam lowercase,
+    tetapi abaikan kata pemicu seperti 'nip' agar tidak ikut
+    dianggap sebagai nama.
+    """
+    raw = [t for t in re.split(r"[^a-zA-Z0-9]+", (q or "").lower()) if len(t) >= 3]
+    stop = {"nip"}  # bisa tambah: {'nrk','nik'} jika perlu
+    return [t for t in raw if t not in stop]
 
 def search_all(query: str) -> pd.DataFrame:
     """
     Kumpulkan baris relevan dari Excel berdasarkan:
       - NIP lengkap (8–20 digit)
       - Prefix NIP (2–17 digit) yang muncul di kalimat
-      - Token nama (>=3 huruf), case-insensitive
+      - Nama (case-insensitive), termasuk pola khusus 'nip <nama>'
     """
-    ql = (query or "").lower().strip()
-    idx = pd.Index([])
+    q = (query or "").strip()
+    ql = q.lower()
+    out_idx = pd.Index([])
 
-    # NIP lengkap
+    # siapkan kolom NIP tanpa spasi
+    nip_series = df[COL["nip"]].astype(str).str.replace(r"\s", "", regex=True)
+
+    # 1) NIP lengkap
     full_nips = re.findall(r"\d{8,20}", ql)
     if full_nips:
-        nip_series = df[COL["nip"]].astype(str).str.replace(r"\s", "", regex=True)
-        idx = idx.union(df[nip_series.isin(full_nips)].index)
+        mask_full = nip_series.isin(full_nips)
+        out_idx = out_idx.union(df[mask_full].index)
 
-    # Prefix NIP (angka dalam kalimat)
+    # 2) Prefix NIP (ambil SEMUA token angka 2–17 digit yang ada dalam kalimat)
     prefixes = re.findall(r"\b(\d{2,17})\b", ql)
     if prefixes:
-        nip_series = df[COL["nip"]].astype(str).str.replace(r"\s", "", regex=True)
-        m = pd.Series(False, index=df.index)
+        mask_pref = pd.Series(False, index=df.index)
         for pref in prefixes:
-            m = m | nip_series.str.startswith(pref, na=False)
-        idx = idx.union(df[m].index)
+            mask_pref = mask_pref | nip_series.str.startswith(pref, na=False)
+        out_idx = out_idx.union(df[mask_pref].index)
 
-    # Nama
-    name_tokens = [t for t in re.split(r"[^a-zA-Z]+", ql) if len(t) >= 3]
-    if name_tokens:
-        base = df[COL["nama"]].fillna("").str.lower()
-        m = pd.Series(False, index=df.index)
-        for t in name_tokens:
-            m = m | base.str.contains(t, na=False)
-        idx = idx.union(df[m].index)
+    # 3) Nama
+    base = df[COL["nama"]].fillna("").str.lower()
 
-    return df.loc[idx].fillna("-")
+    #    a) Pola khusus 'nip <nama...>' -> ambil frasa setelah 'nip' sebagai fokus nama
+    focus_tokens = []
+    m = re.search(r"\bnip\s+([a-zA-Z][a-zA-Z\s\-']+)", ql)
+    if m:
+        focus_tokens = [t for t in re.split(r"[^a-zA-Z]+", m.group(1)) if len(t) >= 3]
+
+    #    b) Token umum (sudah menghapus 'nip' via tokens_from_query)
+    name_tokens = tokens_from_query(ql)
+
+    mask_name = pd.Series(False, index=df.index)
+    # Prioritaskan token fokus dari pola 'nip <nama>'
+    for t in focus_tokens:
+        mask_name = mask_name | base.str.contains(t, na=False)
+    # Tambahkan token umum lainnya (hindari duplikasi)
+    for t in [t for t in name_tokens if t not in focus_tokens]:
+        mask_name = mask_name | base.str.contains(t, na=False)
+
+    if mask_name.any():
+        out_idx = out_idx.union(df[mask_name].index)
+
+    # kembalikan baris unik yang cocok
+    return df.loc[out_idx].fillna("-")
 
 def build_llm_context(query: str, limit_rows: int = MAX_CONTEXT_ROWS) -> str:
     hits = search_all(query)
-    ctx_df = hits[[COL["nip"], COL["nama"], COL["jf"], COL["js"], COL["gol"], COL["pang"], COL["tmtj"], COL["tmtg"], COL["email"], COL["hp"]]].head(limit_rows)
+    ctx_df = hits[[COL["nip"], COL["nama"], COL["jf"], COL["js"],
+                   COL["gol"], COL["pang"], COL["tmtj"], COL["tmtg"],
+                   COL["email"], COL["hp"]]].head(limit_rows)
     return ctx_df.to_csv(index=False)
 
 # ================== WEBSITE (parsing tanpa tampilkan URL) ==================
@@ -235,5 +262,6 @@ if query:
             st.code(context_block)
     except Exception as e:
         st.error(f"Gagal memanggil model: {e}")
+
 
 
