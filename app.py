@@ -169,42 +169,69 @@ def ask_openrouter(prompt: str, temperature=0.35) -> str:
     return resp.json()["choices"][0]["message"]["content"]
 
 # ================== UI ==================
+ORG_KEYWORDS = {"tugas","fungsi","tupoksi","struktur","organisasi","visi","misi","layanan","sejarah","profil","mandat","peran","kewenangan","kebijakan"}
+
+def is_org_question(q: str) -> bool:
+    ql = (q or "").lower()
+    return any(k in ql for k in ORG_KEYWORDS)
+
 query = st.text_input(
     "Tulis pertanyaan lalu tekan Enter",
-    placeholder="contoh: 'nip Restu?', atau 'tugas PSEKP?'"
+    placeholder="contoh: 'Apa tugas PSEKP?', 'Siapa jabatan Restu?', 'struktur PSEKP?'"
 )
 
 if query:
-    # Bangun konteks (CSV dari Excel + snippet dari Web), TAPI tidak menampilkan daftar Excel ke user
+    # 1) Bangun konteks dari Excel (kalau ada yang relevan) + deteksi tema organisasi
     ctx_csv = build_llm_context(query, limit_rows=MAX_CONTEXT_ROWS)
+    has_excel = bool(ctx_csv.strip())
+    org_mode = is_org_question(query)
+
+    # 2) Ambil snippet website (tanpa URL)
     web_snips = web_snippets(query, DEFAULT_URLS, MAX_WEB_SNIPS)
 
+    # 3) Satukan konteks
     parts = []
-    if ctx_csv.strip():
+    # HANYA pakai Excel bila ada hit dan pertanyaannya memang mengarah ke pegawai/NIP/nama
+    if has_excel and not org_mode:
         parts.append("Sumber: [Excel]\n" + ctx_csv)
+    # Untuk tema organisasi, andalkan Web
     for para in web_snips:
         parts.append("Sumber: [Web]\n" + para)
 
     context_block = "\n\n---\n\n".join(parts) if parts else "(KONTEKS KOSONG)"
 
-    prompt = (
-        "Gunakan gaya bahasa alami seperti mengetik manual.\n"
-        "Jika konteks berisi BANYAK pegawai, TAMPILKAN SEMUANYA sebagai daftar berpoin: "
-        "Nama — NIP — Jabatan (ambil JF lalu JS jika JF kosong) dan beri tag [Excel] tiap poin. "
-        "Setelah daftar, boleh tambahkan ringkasan singkat.\n\n"
-        f"KONTEKS TERKURASI (jangan tampilkan mentah):\n{context_block}\n\n"
-        f"PERTANYAAN:\n{query}"
-    )
+    # 4) Susun prompt sesuai mode
+    if has_excel and not org_mode:
+        # Mode pegawai: boleh enumerasi
+        user_prompt = (
+            "Gunakan gaya bahasa alami seperti mengetik manual.\n"
+            "Jika konteks berisi BANYAK pegawai, TAMPILKAN SEMUANYA sebagai daftar berpoin: "
+            "Nama — NIP — Jabatan (ambil JF lalu JS jika JF kosong) dan beri tag [Excel] tiap poin. "
+            "Setelah daftar, boleh tambahkan ringkasan singkat.\n\n"
+            f"KONTEKS TERKURASI (jangan tampilkan mentah):\n{context_block}\n\n"
+            f"PERTANYAAN:\n{query}"
+        )
+        temp = 0.35
+    else:
+        # Mode organisasi: fokus ke Web, jangan menampilkan daftar pegawai
+        user_prompt = (
+            "Jawablah dengan bahasa alami, ringkas di awal lalu jelaskan seperlunya. "
+            "Fokus pada keterangan tugas/fungsi/struktur/layanan berdasarkan konteks dari Website. "
+            "JANGAN menampilkan daftar pegawai. "
+            "Tambahkan penanda sumber [Web] di akhir kalimat fakta. "
+            "Jika data tidak memadai, jawab 'data tidak tersedia'.\n\n"
+            f"KONTEKS TERKURASI (hanya ringkasan dari Website, tanpa URL):\n{context_block}\n\n"
+            f"PERTANYAAN:\n{query}"
+        )
+        temp = 0.4  # sedikit lebih bebas untuk narasi kebijakan
 
     try:
-        with st.spinner("💬 Menyusun jawaban naratif..."):
-            answer = ask_openrouter(prompt, temperature=0.35)
+        with st.spinner("💬 Menyusun jawaban..."):
+            answer = ask_openrouter(user_prompt, temperature=temp)
         st.success("Jawaban:")
         st.write(answer if answer else "data tidak tersedia")
 
-        # Panel audit konteks (tanpa URL)
         with st.expander("🔎 Konteks yang digunakan (tanpa URL)"):
             st.code(context_block)
     except Exception as e:
         st.error(f"Gagal memanggil model: {e}")
-
