@@ -10,11 +10,11 @@ st.title("Selamat datang di **PSEKP AI Chat** 🤖")
 st.caption("Tanya apa saja seputar kepegawaian atau informasi PSEKP. Sumber: Excel & Website resmi PSEKP (OpenRouter).")
 
 DATA_XLSX = Path("data/kepegawaian.xlsx")
-MODEL_DEFAULT = "meta-llama/llama-3-8b-instruct"  # bisa override di Secrets: OPENROUTER_MODEL
-MAX_ROWS = 50       # dinaikkan agar hasil banyak tidak terpotong
-MAX_WEB_SNIPS = 3
+MODEL_DEFAULT = "meta-llama/llama-3-8b-instruct"  # override via Secrets: OPENROUTER_MODEL
+MAX_CONTEXT_ROWS = 100     # baris untuk LLM (narasi)
+MAX_LIST_ROWS    = 500     # baris untuk daftar deterministik (tampilan)
+MAX_WEB_SNIPS    = 3
 
-# Website default (TIDAK ditampilkan ke user)
 DEFAULT_URLS = [
     "https://psekp.setjen.pertanian.go.id/web/",
     "https://psekp.setjen.pertanian.go.id/web/?page_id=396",
@@ -25,7 +25,6 @@ DEFAULT_URLS = [
 if not DATA_XLSX.exists():
     st.error("❌ File **data/kepegawaian.xlsx** tidak ditemukan di repo.")
     st.stop()
-
 try:
     df = pd.read_excel(DATA_XLSX, sheet_name="DATA", dtype=str)
 except ValueError:
@@ -52,55 +51,59 @@ if missing:
     st.error(f"Kolom berikut belum ada di Excel: {missing}")
     st.stop()
 
-# ================== UTILITAS ==================
+# ================== UTIL PENCARIAN ==================
 def tokens_from_query(q: str):
     return [t for t in re.split(r"[^a-zA-Z0-9]+", (q or '').lower()) if len(t) >= 3]
 
-def score_text(text: str, toks):
-    t = (text or '').lower()
-    return sum(t.count(tok) for tok in toks)
-
-# ================== PILIH BARIS EXCEL (untuk konteks LLM) ==================
-def pick_rows_excel(question: str, limit=MAX_ROWS) -> pd.DataFrame:
-    ql = (question or '').lower().strip()
-    if not ql:
-        return df.head(0)
+def search_all(query: str) -> pd.DataFrame:
+    """
+    Cari semua kandidat dari:
+      - NIP lengkap (8–20 digit)
+      - Prefix NIP (2–17 digit) -> semua yang diawali prefix tsb
+      - Token nama (>=3 huruf) case-insensitive
+    Hasil digabung (unik) TANPA BATAS, nanti dipotong saat tampil.
+    """
+    q = (query or "").strip()
+    ql = q.lower()
+    out_idx = pd.Index([])
 
     # NIP lengkap
-    full_nip = re.findall(r'\d{8,20}', ql)
-    if full_nip:
+    full_nips = re.findall(r"\d{8,20}", ql)
+    if full_nips:
         nip_series = df[COL["nip"]].astype(str).str.replace(r"\s", "", regex=True)
-        pick = df[nip_series.isin(full_nip)]
-        if not pick.empty:
-            return pick.head(limit)
+        mask_full = nip_series.isin(full_nips)
+        out_idx = out_idx.union(df[mask_full].index)
 
-    # Prefix NIP
-    m = re.search(r"\b(\d{2,17})\b", ql)
-    if m:
-        prefix = m.group(1)
+    # Prefix NIP (tangkap SEMUA token angka 2–17 digit DI DALAM kalimat)
+    prefixes = re.findall(r"\b(\d{2,17})\b", ql)
+    if prefixes:
         nip_series = df[COL["nip"]].astype(str).str.replace(r"\s", "", regex=True)
-        pick = df[nip_series.str.startswith(prefix, na=False)]
-        if not pick.empty:
-            return pick.head(limit)
+        mask_pref_total = pd.Series(False, index=df.index)
+        for pref in prefixes:
+            mask_pref_total = mask_pref_total | nip_series.str.startswith(pref, na=False)
+        out_idx = out_idx.union(df[mask_pref_total].index)
 
     # Nama
-    toks = tokens_from_query(ql)
-    base = df[COL["nama"]].fillna("").str.lower()
-    mask = pd.Series(False, index=df.index)
-    for t in toks:
-        mask = mask | base.str.contains(t)
-    return df[mask].head(limit)
+    name_tokens = [t for t in re.split(r"[^a-zA-Z]+", ql) if len(t) >= 3]
+    if name_tokens:
+        base = df[COL["nama"]].fillna("").str.lower()
+        mask_name = pd.Series(False, index=df.index)
+        for t in name_tokens:
+            mask_name = mask_name | base.str.contains(t, na=False)
+        out_idx = out_idx.union(df[mask_name].index)
 
-# ================== DAFTAR DETERMINISTIK UNTUK PREFIX NIP ==================
-def list_prefix_hits(prefix: str, limit: int = 200) -> pd.DataFrame:
-    nip_series = df[COL["nip"]].astype(str).str.replace(r"\s", "", regex=True)
-    hits = df[nip_series.str.startswith(prefix, na=False)].fillna("-")
-    return hits.head(limit)
+    return df.loc[out_idx].fillna("-")
+
+def build_llm_context(query: str, limit_rows: int = MAX_CONTEXT_ROWS) -> str:
+    hits = search_all(query)
+    # pilih kolom penting untuk konteks
+    ctx_df = hits[[COL["nip"], COL["nama"], COL["jf"], COL["js"], COL["gol"], COL["pang"], COL["tmtj"], COL["tmtg"], COL["email"], COL["hp"]]].head(limit_rows)
+    ctx_csv = ctx_df.to_csv(index=False)
+    return ctx_csv, hits  # return csv + full hits (untuk daftar deterministik)
 
 # ================== WEBSITE (tanpa tampilkan URL) ==================
 @st.cache_data(show_spinner=False, ttl=3600)
 def fetch_url_text(url: str) -> str:
-    """Ambil teks dari website dan bersihkan HTML, disimpan cache 1 jam."""
     try:
         r = requests.get(url, timeout=20, headers={"User-Agent":"Mozilla/5.0"})
         if r.status_code != 200:
@@ -114,111 +117,101 @@ def fetch_url_text(url: str) -> str:
     except Exception:
         return ""
 
-def pick_snippets_web(question: str, urls: list, max_snips=MAX_WEB_SNIPS):
-    toks = tokens_from_query(question)
-    if not toks or not urls:
+def web_snippets(query: str, urls=DEFAULT_URLS, max_snips=MAX_WEB_SNIPS):
+    toks = tokens_from_query(query)
+    if not toks:
         return []
+    def score_text(t: str):
+        tl = (t or "").lower()
+        return sum(tl.count(tok) for tok in toks)
     snips = []
     for url in urls:
-        raw = fetch_url_text(url.strip())
+        raw = fetch_url_text(url)
         if not raw:
             continue
         paras = [p.strip() for p in re.split(r"\n\s*\n", raw) if p.strip()]
-        scored = sorted(paras, key=lambda p: score_text(p, toks), reverse=True)
-        for para in scored[:2]:
-            if score_text(para, toks) > 0:
-                snips.append(para)  # TANPA URL/DOMAIN
-    snips = sorted(snips, key=lambda x: score_text(x, toks), reverse=True)[:max_snips]
+        top = sorted(paras, key=score_text, reverse=True)[:2]
+        for p in top:
+            if score_text(p) > 0:
+                snips.append(p)
+    snips = sorted(snips, key=score_text, reverse=True)[:max_snips]
     return snips
 
-# ================== LLM via OPENROUTER ==================
+# ================== LLM (OpenRouter) ==================
 def ask_openrouter(prompt: str, temperature=0.3) -> str:
-    """
-    Memanggil OpenRouter Chat Completions.
-    Gunakan Secrets:
-      - OPENROUTER_API_KEY
-      - (opsional) OPENROUTER_MODEL
-    """
     api_key = st.secrets.get("OPENROUTER_API_KEY", "").strip()
     if not api_key:
         raise KeyError("❌ OPENROUTER_API_KEY belum diisi di Secrets.")
     model = st.secrets.get("OPENROUTER_MODEL", MODEL_DEFAULT)
 
     url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
     system_prompt = (
         "Kamu asisten kepegawaian PSEKP yang ramah dan profesional.\n"
         "- Gaya bahasa alami seperti mengetik manual.\n"
         "- Jawaban harus berdasarkan konteks (Excel dan Website) yang diberikan.\n"
-        "- Tambahkan penanda sumber di akhir kalimat fakta: [Excel] atau [Web].\n"
-        "- Jika konteks berisi BANYAK pegawai, tampilkan SELURUHNYA sebagai daftar berpoin (jangan diringkas).\n"
+        "- Jika konteks berisi BANYAK pegawai, tampilkan SELURUHNYA sebagai daftar berpoin "
+        "(Nama — NIP — Jabatan; JF lalu JS jika JF kosong) dan beri tag [Excel] tiap poin.\n"
+        "- Tambahkan penanda sumber di akhir kalimat fakta hanya: [Excel] atau [Web].\n"
         "- Jika data tidak memadai, jawab 'data tidak tersedia'.\n"
-        "- Jangan menampilkan URL/domain secara eksplisit."
+        "- Jangan menampilkan URL/domain."
     )
 
     payload = {
         "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
+            {"role": "user",   "content": prompt},
         ],
-        "temperature": temperature,  # rendah supaya patuh format & lengkap
+        "temperature": temperature,
     }
 
     resp = requests.post(url, headers=headers, json=payload, timeout=60)
     if resp.status_code != 200:
         raise RuntimeError(f"Gagal: {resp.status_code} - {resp.text}")
-    data = resp.json()
-    return data["choices"][0]["message"]["content"]
+    return resp.json()["choices"][0]["message"]["content"]
 
 # ================== UI ==================
 query = st.text_input(
     "Tulis pertanyaan lalu tekan Enter",
-    placeholder="contoh: 'Siapa saja yang NIP-nya diawali 1990?', atau 'Jabatan Restu apa?'"
+    placeholder="contoh: 'Siapa saja yang punya NIP 1990?', 'Jabatan Restu apa?'"
 )
 
 if query:
-    # A) Jika prefix NIP → tampilkan daftar deterministik (pasti lengkap)
-    prefix_match = re.fullmatch(r"\d{2,17}", query.strip())
-    if prefix_match:
-        pref = prefix_match.group(0)
-        hits = list_prefix_hits(pref, limit=200)
-        if hits.empty:
-            st.info(f"Tidak ada NIP yang diawali '{pref}'.")
-        else:
-            st.markdown(f"### Daftar NIP diawali '{pref}' (total {len(hits)})")
-            for _, r in hits.iterrows():
-                nama = r[COL["nama"]]
-                nip  = r[COL["nip"]]
-                jab  = (r.get(COL["jf"]) or r.get(COL["js"]) or "-")
-                st.write(f"- **{nama}** — NIP: `{nip}` — {jab} [Excel]")
+    # 1) Bangun konteks untuk LLM + kumpulkan semua hit (full)
+    ctx_csv, all_hits = build_llm_context(query, limit_rows=MAX_CONTEXT_ROWS)
 
-    # B) Siapkan konteks untuk LLM (tetap dijalankan untuk narasi & penjelasan tambahan)
-    ctx_df = pick_rows_excel(query, limit=MAX_ROWS)[
-        [COL["nip"], COL["nama"], COL["jf"], COL["js"], COL["gol"], COL["pang"], COL["tmtj"], COL["tmtg"], COL["email"], COL["hp"]]
-    ].fillna("-")
-    ctx_csv = ctx_df.to_csv(index=False)
+    # 2) Ambil snippet website (tanpa URL)
+    web_snips = web_snippets(query, DEFAULT_URLS, MAX_WEB_SNIPS)
 
-    web_snips = pick_snippets_web(query, DEFAULT_URLS, MAX_WEB_SNIPS)
+    # 3) Tampilkan daftar deterministik SEMUA pegawai yang cocok (jika ada >0)
+    if not all_hits.empty:
+        st.markdown(f"### Hasil dari Excel (total {len(all_hits)}):")
+        # Batasi tampilan panjang
+        show_hits = all_hits.head(MAX_LIST_ROWS)
+        for _, r in show_hits.iterrows():
+            nama = r[COL["nama"]]
+            nip  = r[COL["nip"]]
+            jab  = (r.get(COL["jf"]) or r.get(COL["js"]) or "-")
+            st.write(f"- **{nama}** — NIP: `{nip}` — {jab} [Excel]")
+        if len(all_hits) > MAX_LIST_ROWS:
+            st.info(f"Ditampilkan {MAX_LIST_ROWS} pertama dari {len(all_hits)} hasil.")
 
+    # 4) Rangkai context block untuk LLM
     parts = []
-    if not ctx_df.empty:
-        parts.append("Sumber: [Excel]\n" + ctx_csv)
+    if not all_hits.empty:
+        parts.append("Sumber: [Excel]\n" + ctx_csv)  # hanya subset (MAX_CONTEXT_ROWS) agar token hemat
     for para in web_snips:
         parts.append("Sumber: [Web]\n" + para)
-
     context_block = "\n\n---\n\n".join(parts) if parts else "(KONTEKS KOSONG)"
 
-    # C) Prompt LLM — paksa enumerasi lengkap jika ada banyak pegawai
+    # 5) Prompt ke LLM (narasi + aturan enumerasi)
     prompt = (
         "Gunakan gaya bahasa alami seperti mengetik manual.\n"
         "Jika konteks berisi BANYAK pegawai, TAMPILKAN SEMUANYA sebagai daftar berpoin: "
-        "Nama — NIP — Jabatan (JF lalu JS jika JF kosong). Setiap poin beri tag [Excel].\n"
-        "Setelah daftar (jika ada), boleh tambah ringkasan singkat.\n\n"
+        "Nama — NIP — Jabatan (ambil JF lalu JS jika JF kosong) dan beri tag [Excel] tiap poin. "
+        "Setelah daftar, boleh tambahkan ringkasan singkat.\n\n"
         f"KONTEKS TERKURASI (jangan tampilkan mentah):\n{context_block}\n\n"
         f"PERTANYAAN:\n{query}"
     )
@@ -226,9 +219,8 @@ if query:
     try:
         with st.spinner("💬 Menyusun jawaban (Excel & Website)..."):
             answer = ask_openrouter(prompt, temperature=0.3)
-        st.success("Jawaban:")
+        st.success("Jawaban naratif:")
         st.write(answer if answer else "data tidak tersedia")
-
         with st.expander("🔎 Konteks yang digunakan (tanpa URL)"):
             st.code(context_block)
     except Exception as e:
