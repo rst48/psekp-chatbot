@@ -3,30 +3,23 @@ import streamlit as st
 import re, requests
 from pathlib import Path
 from bs4 import BeautifulSoup
-from openai import OpenAI
 
 # ================== KONFIGURASI ==================
 st.set_page_config(page_title="PSEKP AI Chat", layout="centered")
 st.title("Selamat datang di **PSEKP AI Chat** 🤖")
-st.caption("Tanya apa saja seputar kepegawaian atau informasi PSEKP. Sumber: Excel & website resmi PSEKP (menggunakan GPT-3.5-turbo).")
+st.caption("Tanya apa saja seputar kepegawaian atau informasi tentang PSEKP")
 
 DATA_XLSX = Path("data/kepegawaian.xlsx")
+MODEL_DEFAULT = "meta-llama/llama-3-8b-instruct"
 MAX_ROWS = 5
 MAX_WEB_SNIPS = 3
+
+# ================== SUMBER WEBSITE DEFAULT ==================
 DEFAULT_URLS = [
     "https://psekp.setjen.pertanian.go.id/web/",
     "https://psekp.setjen.pertanian.go.id/web/?page_id=396",
     "https://psekp.setjen.pertanian.go.id/web/?page_id=594"
 ]
-
-# ================== OPENAI CLIENT ==================
-api_key = st.secrets.get("OPENAI_API_KEY", "").strip()
-if not api_key:
-    st.error("❌ OPENAI_API_KEY belum diisi di Secrets Streamlit.")
-    st.stop()
-
-client = OpenAI(api_key=api_key)
-MODEL_NAME = st.secrets.get("OPENAI_MODEL", "gpt-3.5-turbo")
 
 # ================== BACA DATA EXCEL ==================
 if not DATA_XLSX.exists():
@@ -126,40 +119,59 @@ def pick_snippets_web(question: str, urls: list, max_snips=MAX_WEB_SNIPS):
     snips = sorted(snips, key=lambda x: score_text(x, toks), reverse=True)[:max_snips]
     return snips
 
-# ================== FUNGSI GPT-3.5 ==================
-def ask_openai(prompt: str, temperature=0.7) -> str:
+# ================== LLM (OpenRouter) ==================
+def ask_openrouter(prompt: str, temperature=0.7) -> str:
+    api_key = st.secrets.get("OPENROUTER_API_KEY", "").strip()
+    if not api_key:
+        raise KeyError("❌ OPENROUTER_API_KEY belum diisi di Secrets.")
+    model = st.secrets.get("OPENROUTER_MODEL", MODEL_DEFAULT)
+
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
     system_prompt = (
-        "Kamu adalah asisten kepegawaian PSEKP yang ramah dan profesional.\n"
+        "Kamu asisten kepegawaian PSEKP yang ramah dan profesional.\n"
         "- Gunakan gaya bahasa alami seperti mengetik manual.\n"
-        "- Jawaban berdasarkan konteks dari Excel dan Website (tanpa menampilkan URL).\n"
+        "- Jawaban harus berdasarkan konteks dari Excel dan Website (tanpa menampilkan URL).\n"
         "- Tambahkan penanda sumber di akhir kalimat fakta: [Excel] atau [Web].\n"
-        "- Jika data tidak memadai, jawab 'data tidak tersedia'."
+        "- Jika data tidak memadai, jawab 'data tidak tersedia'.\n"
+        "- Hindari menyebut URL atau tautan secara eksplisit."
     )
 
-    response = client.chat.completions.create(
-        model=MODEL_NAME,
-        temperature=temperature,
-        messages=[
+    payload = {
+        "model": model,
+        "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt}
-        ]
-    )
-    return response.choices[0].message.content.strip()
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": temperature,
+    }
+
+    resp = requests.post(url, headers=headers, json=payload, timeout=60)
+    if resp.status_code != 200:
+        raise RuntimeError(f"Gagal: {resp.status_code} - {resp.text}")
+    return resp.json()["choices"][0]["message"]["content"]
 
 # ================== UI ==================
 query = st.text_input(
     "Tulis pertanyaan lalu tekan Enter",
-    placeholder="contoh: 'Apa tugas dan fungsi PSEKP?', atau 'Jabatan Restu apa?'"
+    placeholder="contoh: 'Apa tugas dan fungsi PSEKP?', atau 'Jabatan Eko Nugroho apa?'"
 )
 
 if query:
+    # Ambil data Excel relevan
     ctx_df = pick_rows_excel(query, limit=MAX_ROWS)[
         [COL["nip"], COL["nama"], COL["jf"], COL["js"], COL["gol"], COL["pang"], COL["tmtj"], COL["tmtg"], COL["email"], COL["hp"]]
     ].fillna("-")
     ctx_csv = ctx_df.to_csv(index=False)
 
+    # Ambil data dari web
     web_snips = pick_snippets_web(query, DEFAULT_URLS, MAX_WEB_SNIPS)
 
+    # Satukan konteks
     parts = []
     if not ctx_df.empty:
         parts.append("Sumber: [Excel]\n" + ctx_csv)
@@ -169,18 +181,18 @@ if query:
     context_block = "\n\n---\n\n".join(parts) if parts else "(KONTEKS KOSONG)"
     prompt = (
         "Gunakan gaya bahasa alami seperti mengetik manual. "
-        "Tambahkan penanda sumber sesuai konteks ([Excel] atau [Web]).\n\n"
-        f"KONTEKS:\n{context_block}\n\n"
+        "Saat menulis fakta, tambahkan penanda sumber sesuai konteks (hanya [Excel] atau [Web]).\n\n"
+        f"KONTEKS TERKURASI (boleh mengacu, jangan tampilkan mentah):\n{context_block}\n\n"
         f"PERTANYAAN:\n{query}"
     )
 
     try:
         with st.spinner("💬 Menyusun jawaban dari Excel & Website..."):
-            answer = ask_openai(prompt, temperature=0.75)
+            answer = ask_openrouter(prompt, temperature=0.75)
         st.success("Jawaban:")
         st.write(answer if answer else "data tidak tersedia")
 
         with st.expander("🔎 Konteks yang digunakan (tanpa URL)"):
             st.code(context_block)
     except Exception as e:
-        st.error(f"Gagal memanggil OpenAI: {e}")
+        st.error(f"Gagal memanggil model: {e}")
