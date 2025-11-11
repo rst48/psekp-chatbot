@@ -5,9 +5,9 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 
 # ================== KONFIGURASI ==================
-st.set_page_config(page_title="PSEKP AI Chat", layout="centered")
-st.title("Selamat datang di **PSEKP AI Chat** 🤖")
-st.caption("Jawaban naratif berbasis Excel & Website resmi PSEKP.")
+st.set_page_config(page_title="PSEKP ChatBot", layout="centered")
+st.title("Selamat datang di **PSEKP ChatBot** 🤖")
+st.caption("Jawaban naratif berbasis Data Kepegawaian & Website resmi PSEKP.")
 st.caption("Powered by OpenRouter")
 
 DATA_XLSX = Path("data/kepegawaian.xlsx")
@@ -262,6 +262,7 @@ if query:
             st.code(context_block)
     except Exception as e:
         st.error(f"Gagal memanggil model: {e}")
+
 
 
 
