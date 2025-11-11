@@ -152,40 +152,123 @@ time.sleep(0.6)
 typewriter(c2, "Ada yang mau kamu ketahui tentang PSEKP dan Kepegawaiannya?", delay=0.05, style="#####")
 st.markdown("---")
 
-# ================== INPUT DENGAN TOMBOL PANAH ==================
-col1, col2 = st.columns([8, 1])
-with col1:
-    query = st.text_input(
-        "Tuliskan pertanyaanmu, lalu tekan Enter atau tombol kirim",
-        placeholder="contoh: 'Apa tugas PSEKP?', 'Siapa Restu?', 'NIP Frilla?'",
-        label_visibility="collapsed"
-    )
-with col2:
-    send = st.button("↑", use_container_width=True)
-
+# ================== INPUT CHAT DENGAN TOMBOL HIJAU BULAT ==================
 st.markdown("""
 <style>
-div.stButton > button {
-    background-color: #16a34a;
-    color: white;
-    font-size: 20px;
-    font-weight: bold;
-    border-radius: 10px;
-    height: 48px;
+.chat-input-container {
+    position: relative;
     width: 100%;
-    margin-top: 6px;
 }
-div.stButton > button:hover {
+.chat-input {
+    width: 100%;
+    padding: 12px 50px 12px 15px;
+    border-radius: 25px;
+    border: 1px solid #ccc;
+    font-size: 16px;
+    outline: none;
+}
+.chat-input:focus {
+    border-color: #22c55e;
+    box-shadow: 0 0 0 1px #22c55e;
+}
+.send-button {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
     background-color: #22c55e;
     color: white;
+    border: none;
+    border-radius: 50%;
+    width: 38px;
+    height: 38px;
+    font-size: 18px;
+    cursor: pointer;
+    transition: all 0.2s ease-in-out;
+}
+.send-button:hover {
+    background-color: #16a34a;
+    transform: translateY(-50%) scale(1.05);
 }
 </style>
+
+<div class="chat-input-container">
+  <input id="user_input" class="chat-input" placeholder="contoh: 'Apa tugas PSEKP?', 'Siapa Restu?', 'NIP Frilla?'" />
+  <button class="send-button" onclick="sendMessage()">↑</button>
+</div>
+
+<script>
+function sendMessage() {
+    const input = document.getElementById('user_input');
+    if (input.value.trim() !== '') {
+        window.parent.postMessage({type: 'streamlit:setComponentValue', value: input.value}, '*');
+        input.value = '';
+    }
+}
+</script>
 """, unsafe_allow_html=True)
 
-if send and query:
-    st.session_state["submitted_query"] = query
-elif query and "submitted_query" not in st.session_state:
-    st.session_state["submitted_query"] = query
+# Ambil input dari komponen HTML di atas
+query = st.text_input("Tuliskan pertanyaanmu:", label_visibility="collapsed", key="query_hidden")
+# ================== INPUT CHAT DENGAN TOMBOL HIJAU BULAT ==================
+st.markdown("""
+<style>
+.chat-input-container {
+    position: relative;
+    width: 100%;
+}
+.chat-input {
+    width: 100%;
+    padding: 12px 50px 12px 15px;
+    border-radius: 25px;
+    border: 1px solid #ccc;
+    font-size: 16px;
+    outline: none;
+}
+.chat-input:focus {
+    border-color: #22c55e;
+    box-shadow: 0 0 0 1px #22c55e;
+}
+.send-button {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    background-color: #22c55e;
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 38px;
+    height: 38px;
+    font-size: 18px;
+    cursor: pointer;
+    transition: all 0.2s ease-in-out;
+}
+.send-button:hover {
+    background-color: #16a34a;
+    transform: translateY(-50%) scale(1.05);
+}
+</style>
+
+<div class="chat-input-container">
+  <input id="user_input" class="chat-input" placeholder="contoh: 'Apa tugas PSEKP?', 'Siapa Restu?', 'NIP Frilla?'" />
+  <button class="send-button" onclick="sendMessage()">↑</button>
+</div>
+
+<script>
+function sendMessage() {
+    const input = document.getElementById('user_input');
+    if (input.value.trim() !== '') {
+        window.parent.postMessage({type: 'streamlit:setComponentValue', value: input.value}, '*');
+        input.value = '';
+    }
+}
+</script>
+""", unsafe_allow_html=True)
+
+# Ambil input dari komponen HTML di atas
+query = st.text_input("Tuliskan pertanyaanmu:", label_visibility="collapsed", key="query_hidden")
+
 
 # ================== PROSES JAWABAN ==================
 if "submitted_query" in st.session_state:
@@ -228,3 +311,4 @@ if "submitted_query" in st.session_state:
             st.code(context_block)
     except Exception as e:
         st.error(f"Gagal memanggil model: {e}")
+
