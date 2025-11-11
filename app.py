@@ -220,8 +220,8 @@ if not st.session_state.sena_intro_done:
     container2 = st.empty()
 
     # Teks intro
-    intro_line1 = "Hai, saya SENA 👋"
-    intro_line2 = "Asisten Cerdas PSEKP, ada yang mau kamu ketahui tentang PSEKP dan Kepegawaian?"
+    intro_line1 = "Hai 👋, saya SENA, Asisten Cerdas PSEKP"
+    intro_line2 = "Ada yang mau kamu ketahui tentang PSEKP dan Kepegawaiannya?"
 
     # Efek mengetik baris pertama
     typewriter(container1, intro_line1, delay=0.05, style="###")
@@ -294,6 +294,7 @@ if query:
             st.code(context_block)
     except Exception as e:
         st.error(f"Gagal memanggil model: {e}")
+
 
 
 
