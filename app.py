@@ -96,8 +96,8 @@ if use_gemini and not GEMINI_OK:
 # -----------------------------
 # Pencarian (NIP prefix / Nama)
 # -----------------------------
-st.success("Ketik angka (NIP penuh/awalan, mis. 1994) atau nama (tidak case sensitive).")
-q = st.text_input("Cari NIP (boleh sebagian) atau Nama", placeholder="contoh: 1994 atau restu")
+st.success("Ketik angka (NIP penuh/awalan, mis. 1990) atau nama pegawai.")
+q = st.text_input("Cari NIP (boleh sebagian) atau Nama")
 
 def search_engine(df: pd.DataFrame, mode: str, value: str) -> pd.DataFrame:
     if mode == "nip_exact":
@@ -228,3 +228,4 @@ else:
                     st.code(csv_ctx, language="csv")
             except Exception as e:
                 st.error(f"Gagal memanggil Gemini: {e}")
+
