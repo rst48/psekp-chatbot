@@ -1,3 +1,12 @@
+# ================== IMPORT LIBRARY ==================
+import streamlit as st
+import pandas as pd
+import requests
+import re
+import time
+from pathlib import Path
+from bs4 import BeautifulSoup
+
 # ================== KONFIGURASI ==================
 st.set_page_config(page_title="PSEKP AI Chat", layout="centered")
 st.title("**PSEKP AI Chat** 🤖")
@@ -313,3 +322,4 @@ if query:
             st.code(context_block)
     except Exception as e:
         st.error(f"Gagal memanggil model: {e}")
+
