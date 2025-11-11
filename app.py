@@ -152,80 +152,11 @@ time.sleep(0.6)
 typewriter(c2, "Ada yang mau kamu ketahui tentang PSEKP dan Kepegawaiannya?", delay=0.05, style="#####")
 st.markdown("---")
 
-# ================== INPUT CHAT DENGAN TOMBOL PANAH HIJAU BULAT ==================
-import streamlit.components.v1 as components
-
-user_input = components.html("""
-<style>
-.chat-box {
-    position: relative;
-    width: 100%;
-}
-.chat-input {
-    width: 100%;
-    padding: 12px 48px 12px 15px;
-    border-radius: 25px;
-    border: 1px solid #ccc;
-    font-size: 16px;
-    outline: none;
-    box-sizing: border-box;
-}
-.chat-input:focus {
-    border-color: #22c55e;
-    box-shadow: 0 0 0 1px #22c55e;
-}
-.send-btn {
-    position: absolute;
-    right: 8px;
-    top: 50%;
-    transform: translateY(-50%);
-    background-color: #22c55e;
-    color: white;
-    border: none;
-    border-radius: 50%;
-    width: 36px;
-    height: 36px;
-    font-size: 18px;
-    cursor: pointer;
-    transition: all 0.2s ease;
-}
-.send-btn:hover {
-    background-color: #16a34a;
-    transform: translateY(-50%) scale(1.05);
-}
-</style>
-
-<div class="chat-box">
-  <input type="text" id="chatInput" class="chat-input"
-         placeholder="contoh: 'Apa tugas PSEKP?', 'Siapa Restu?', 'NIP Frilla?'" 
-         onkeydown="if(event.key==='Enter'){sendMessage();}" />
-  <button class="send-btn" onclick="sendMessage()">↑</button>
-</div>
-
-<script>
-function sendMessage() {
-  const val = document.getElementById('chatInput').value;
-  if (val.trim() !== '') {
-    const streamlitEvent = new CustomEvent("streamlit:sendMessage", { detail: val });
-    window.parent.document.dispatchEvent(streamlitEvent);
-    document.getElementById('chatInput').value = '';
-  }
-}
-</script>
-""", height=70)
-
-# Tambahkan listener untuk menerima event dari komponen HTML di atas
-if "query" not in st.session_state:
-    st.session_state.query = ""
-
-import streamlit.runtime.scriptrunner as stsr
-ctx = stsr.get_script_run_ctx()
-if ctx is not None:
-    from streamlit.web.server.websocket_headers import _get_websocket_headers
-    _get_websocket_headers()
-
-query = st.session_state.query
-
+# ================== INPUT CHAT SEDERHANA ==================
+query = st.text_input(
+    "Tuliskan pertanyaanmu, lalu tekan Enter",
+    placeholder="contoh: 'Apa tugas PSEKP?', 'Siapa Restu?', 'NIP Frilla?'"
+)
 
 # ================== PROSES JAWABAN ==================
 if "submitted_query" in st.session_state:
