@@ -1,20 +1,22 @@
 import pandas as pd
 import streamlit as st
-import re
+import re, json
 from pathlib import Path
 
-# ==== LLM (OpenAI) untuk interpretasi query (opsional) ====
+# ====== Gemini (opsional) ======
 try:
-    from openai import OpenAI
-    LLM_AVAILABLE = True
+    import google.generativeai as genai
+    GEMINI_OK = True
 except Exception:
-    LLM_AVAILABLE = False
+    GEMINI_OK = False
 
-st.set_page_config(page_title="Chatbot Kepegawaian (PSEKP)", layout="centered")
-st.title("Chatbot Kepegawaian — PoC (PSEKP)")
-st.caption("Baca Excel dari upload atau dari repo (data/kepegawaian.xlsx). Sheet harus bernama: DATA")
+st.set_page_config(page_title="Chatbot Kepegawaian — PSEKP", layout="centered")
+st.title("Chatbot Kepegawaian — PSEKP")
+st.caption("Sumber data: file di repo → data/kepegawaian.xlsx (sheet: DATA)")
 
-# ======= Konfigurasi kolom =======
+# -----------------------------
+# Konfigurasi kolom & helper
+# -----------------------------
 COL = {
     "nip":"NIP",
     "nama":"Nama",
@@ -43,7 +45,7 @@ def check_columns(df: pd.DataFrame):
         st.error(f"Kolom berikut belum ada di Excel: {miss}")
         st.stop()
 
-def format_row(r: dict) -> str:
+def fmt(r: dict) -> str:
     jab = r.get(COL["jf"]) if r.get(COL["jf"]) and r.get(COL["jf"]) != "-" else r.get(COL["js"], "-")
     return (
         f"**{r.get(COL['nama'],'-')}**\n"
@@ -59,74 +61,43 @@ def mask(nip: str) -> str:
     nip = str(nip or "")
     return nip if len(nip) < 8 else nip[:4] + "****" + nip[-4:]
 
-# ======= Pilih sumber data =======
-mode = st.radio("Sumber data", ["Upload Excel", "Pakai file di repo (data/kepegawaian.xlsx)"])
-if mode == "Upload Excel":
-    uploaded = st.file_uploader("Unggah Excel (sheet DATA)", type=["xlsx"])
-    if not uploaded:
-        st.info("Unggah file Excel kamu dulu (kolom sesuai template).")
-        st.stop()
-    df = pd.read_excel(uploaded, sheet_name="DATA", dtype=str)
-else:
-    path = Path("data/kepegawaian.xlsx")
-    if not path.exists():
-        st.error("File data/kepegawaian.xlsx tidak ditemukan di repo.")
-        st.stop()
-    try:
-        df = pd.read_excel(path, sheet_name="DATA", dtype=str)
-    except ValueError:
-        st.error("Sheet 'DATA' tidak ditemukan. Ubah nama sheet di Excel menjadi 'DATA'.")
-        st.stop()
+# -----------------------------
+# Baca data dari repo saja
+# -----------------------------
+DATA_PATH = Path("data/kepegawaian.xlsx")
+if not DATA_PATH.exists():
+    st.error("File **data/kepegawaian.xlsx** tidak ditemukan di repo. Pastikan nama & lokasinya benar.")
+    st.stop()
+
+try:
+    df = pd.read_excel(DATA_PATH, sheet_name="DATA", dtype=str)
+except ValueError:
+    st.error("Sheet **'DATA'** tidak ditemukan. Ubah nama sheet di Excel menjadi 'DATA'.")
+    st.stop()
+except Exception as e:
+    st.error(f"Gagal membaca Excel: {e}")
+    st.stop()
 
 df = clean_df(df)
 check_columns(df)
 
-# ======= Toggle LLM routing (interpret query) =======
-use_llm = st.toggle("Gunakan LLM untuk interpretasi query (opsional)", value=False,
-                    help="LLM hanya dipakai untuk memahami maksud (nip_prefix atau name_contains). Pencarian tetap deterministik di Excel.")
-if use_llm and not LLM_AVAILABLE:
-    st.warning("Paket openai belum terpasang. Tambahkan 'openai>=1.0.0' di requirements.txt, lalu deploy ulang.")
-    use_llm = False
+# -----------------------------
+# Toggle: Gemini router (opsional)
+# -----------------------------
+use_gemini = st.toggle(
+    "Gunakan Gemini untuk interpretasi query (opsional)",
+    value=False,
+    help="Gemini hanya merutekan maksud (nip_exact/nip_prefix/name_contains). Pencarian tetap ke Excel."
+)
+if use_gemini and not GEMINI_OK:
+    st.warning("Paket google-generativeai belum terpasang. Tambahkan di requirements.txt, lalu deploy ulang.")
+    use_gemini = False
 
-# ======= Input Query =======
-st.success("Ketik: angka (NIP penuh atau awalan NIP seperti 1994) atau nama (tidak case sensitive).")
+# -----------------------------
+# Pencarian (NIP prefix / Nama)
+# -----------------------------
+st.success("Ketik angka (NIP penuh/awalan, mis. 1994) atau nama (tidak case sensitive).")
 q = st.text_input("Cari NIP (boleh sebagian) atau Nama", placeholder="contoh: 1994 atau restu")
-
-# ======= LLM router (opsional) =======
-def llm_route(query: str):
-    """
-    Kembalikan dict {mode: 'nip_exact'|'nip_prefix'|'name_contains', value: '...'}
-    LLM hanya bantu interpretasi, bukan mencari.
-    """
-    try:
-        client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-    except Exception:
-        st.error("OPENAI_API_KEY belum diisi di Secrets. Matikan toggle LLM atau isi kuncinya.")
-        return None
-
-    system_msg = (
-        "Kamu adalah router intent. Terima pertanyaan manusia, putuskan apakah itu pencarian NIP atau Nama.\n"
-        "- Jika hanya angka dan panjang >= 18 → mode=nip_exact, value=angka itu.\n"
-        "- Jika hanya angka dan panjang < 18 → mode=nip_prefix, value=angka itu.\n"
-        "- Selain itu → mode=name_contains, value=frasa nama (lowercase, tanpa kata tidak penting).\n"
-        "Jawab KETAT dalam JSON satu baris, tanpa komentar. Contoh: {\"mode\":\"nip_prefix\",\"value\":\"1994\"}"
-    )
-    user_msg = f"Pertanyaan: {query}"
-    try:
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role":"system","content":system_msg},
-                {"role":"user","content":user_msg}
-            ],
-            temperature=0
-        )
-        text = resp.choices[0].message.content.strip()
-        import json
-        return json.loads(text)
-    except Exception as e:
-        st.warning(f"Gagal interpretasi LLM, fallback ke aturan biasa. Detail: {e}")
-        return None
 
 def search_engine(df: pd.DataFrame, mode: str, value: str) -> pd.DataFrame:
     if mode == "nip_exact":
@@ -139,38 +110,121 @@ def search_engine(df: pd.DataFrame, mode: str, value: str) -> pd.DataFrame:
         return df[df[COL["nama"]].fillna("").str.contains(value, case=False, na=False)]
     return df.head(0)
 
+# Router via Gemini (opsional)
+def gemini_route(query: str):
+    """
+    Output JSON: {"mode":"nip_exact|nip_prefix|name_contains","value":"..."}
+    """
+    try:
+        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    except KeyError:
+        st.error("GEMINI_API_KEY belum diisi di Streamlit Secrets.")
+        return None
+
+    system = (
+        "Kamu router intent. Terima teks user, tentukan mode pencarian:\n"
+        "- Jika hanya angka dan panjang >= 18 → mode=nip_exact\n"
+        "- Jika hanya angka dan panjang < 18 → mode=nip_prefix\n"
+        "- Selain itu → mode=name_contains\n"
+        "Balas **hanya** JSON valid satu baris. Contoh: {\"mode\":\"nip_prefix\",\"value\":\"1994\"}"
+    )
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        resp = model.generate_content(system + "\n\nUser: " + query)
+        text = (resp.text or "").strip()
+        text = text.replace("```json", "").replace("```", "").strip()
+        return json.loads(text)
+    except Exception as e:
+        st.warning(f"Gagal interpretasi Gemini, pakai aturan biasa. Detail: {e}")
+        return None
+
 if q:
     q = q.strip()
-
-    # Tentukan mode/value
     route = None
-    if use_llm:
-        route = llm_route(q)
+    if use_gemini:
+        route = gemini_route(q)
 
     if route and isinstance(route, dict) and route.get("mode") and route.get("value") is not None:
         mode_key = route["mode"]
         val = str(route["value"]).strip()
     else:
-        # Fallback deterministic (tanpa LLM)
+        # fallback deterministik (tanpa LLM)
         if q.isdigit():
-            if len(q) >= 18:
-                mode_key, val = "nip_exact", q
-            else:
-                mode_key, val = "nip_prefix", q
+            mode_key, val = ("nip_exact", q) if len(q) >= 18 else ("nip_prefix", q)
         else:
             mode_key, val = "name_contains", q
 
     hits = search_engine(df, mode_key, val)
 
-    # Output
     if hits.empty:
         st.warning(f"Tidak ada data cocok (mode: {mode_key}, nilai: {val}).")
     elif len(hits) == 1:
         st.markdown("**Hasil:**")
-        st.markdown(format_row(hits.iloc[0].to_dict()))
+        st.markdown(fmt(hits.iloc[0].to_dict()))
     else:
         st.markdown(f"Ditemukan {len(hits)} data. Menampilkan maksimal {MAX_LIST}:")
         for _, r in hits.head(MAX_LIST).iterrows():
-            st.markdown("---")
             jab = (r.get(COL["jf"]) or r.get(COL["js"]) or "-")
+            st.markdown("---")
             st.markdown(f"**{r[COL['nama']]}** — NIP: `{mask(r[COL['nip']])}`\nJabatan: {jab}")
+
+st.divider()
+
+# -----------------------------
+# Panel Tanya AI (jawab pakai data Excel)
+# -----------------------------
+st.subheader("Tanya AI (berdasar baris relevan dari Excel)")
+if not GEMINI_OK:
+    st.info("Tambahkan di requirements.txt: google-generativeai>=0.7.0 untuk mengaktifkan Gemini.")
+else:
+    ask = st.text_area("Pertanyaan (contoh: 'jabatan restu apa?' atau 'NIP 1976... jabatannya?')", height=100)
+    n = st.slider("Konteks baris (maks)", 1, 10, 5)
+
+    def pick_rows(df: pd.DataFrame, question: str, limit: int) -> pd.DataFrame:
+        ql = question.lower()
+        digits = re.findall(r"\d{8,20}", ql)
+        if digits:
+            nip_series = df[COL["nip"]].astype(str).str.replace(r"\s", "", regex=True)
+            pick = df[nip_series.isin(digits)]
+            if not pick.empty:
+                return pick.head(limit)
+        tokens = [t for t in re.split(r"[^a-zA-Z]+", ql) if len(t) >= 3]
+        if not tokens:
+            return df.head(0)
+        base = df[COL["nama"]].fillna("").str.lower()
+        maskname = pd.Series(False, index=df.index)
+        for t in tokens:
+            maskname = maskname | base.str.contains(t)
+        return df[maskname].head(limit)
+
+    if st.button("Tanya Gemini"):
+        if not ask.strip():
+            st.warning("Tulis pertanyaannya dulu ya.")
+        else:
+            try:
+                genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+            except KeyError:
+                st.error("GEMINI_API_KEY belum diisi di Streamlit Secrets.")
+                st.stop()
+
+            ctx = pick_rows(df, ask, n)[
+                [COL["nip"], COL["nama"], COL["jf"], COL["js"], COL["gol"], COL["pang"], COL["tmtj"], COL["tmtg"], COL["email"], COL["hp"]]
+            ].fillna("-")
+            csv_ctx = ctx.to_csv(index=False)
+
+            system = (
+                "Kamu asisten kepegawaian PSEKP. Jawab hanya berdasarkan DATA berikut (CSV). "
+                "Jika info tidak ada, katakan 'data tidak tersedia'. Jawab ringkas & rapi."
+            )
+            prompt = f"{system}\n\nDATA (CSV):\n{csv_ctx}\n\nPERTANYAAN:\n{ask}"
+
+            try:
+                model = genai.GenerativeModel("gemini-1.5-flash")
+                with st.spinner("Gemini berpikir..."):
+                    resp = model.generate_content(prompt)
+                st.success("Jawaban:")
+                st.write((resp.text or "").strip())
+                with st.expander("Lihat konteks (CSV)"):
+                    st.code(csv_ctx, language="csv")
+            except Exception as e:
+                st.error(f"Gagal memanggil Gemini: {e}")
