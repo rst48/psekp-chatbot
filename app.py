@@ -158,7 +158,7 @@ def ask_openrouter(prompt: str, temperature=0.7) -> str:
 # ================== UI ==================
 query = st.text_input(
     "Tulis pertanyaan lalu tekan Enter",
-    placeholder="contoh: 'Apa tugas dan fungsi PSEKP?', atau 'Jabatan Restu apa?'"
+    placeholder="contoh: 'Apa tugas dan fungsi PSEKP?', atau 'Jabatan Eko Nugroho apa?'"
 )
 
 if query:
@@ -196,4 +196,5 @@ if query:
             st.code(context_block)
     except Exception as e:
         st.error(f"Gagal memanggil model: {e}")
+
 
