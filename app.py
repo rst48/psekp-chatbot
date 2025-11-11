@@ -225,12 +225,12 @@ if not st.session_state.sena_intro_done:
     intro_line2 = "Asisten Cerdas PSEKP, ada yang mau kamu ketahui tentang PSEKP dan Kepegawaian?"
 
     # Efek mengetik baris pertama
-    typewriter(container1, intro_line1, delay=0.15, style="###")
+    typewriter(container1, intro_line1, delay=0.05, style="###")
 
     time.sleep(0.8)  # jeda sebelum baris kedua
 
     # Efek mengetik baris kedua
-    typewriter(container2, intro_line2, delay=0.15, style="#####")
+    typewriter(container2, intro_line2, delay=0.05, style="#####")
 
     st.session_state.sena_intro_done = True
     st.markdown("---")
@@ -295,6 +295,7 @@ if query:
             st.code(context_block)
     except Exception as e:
         st.error(f"Gagal memanggil model: {e}")
+
 
 
 
