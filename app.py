@@ -14,7 +14,7 @@ st.caption("Powered by OpenRouter")
 
 DATA_XLSX = Path("data/kepegawaian.xlsx")
 MODEL_DEFAULT = "meta-llama/llama-3-8b-instruct"  # bisa override via Secrets
-MAX_CONTEXT_ROWS = 100  # baris Excel yg dimasukkan ke konteks LLM
+MAX_CONTEXT_ROWS = 100
 MAX_WEB_SNIPS = 3
 DEFAULT_URLS = [
     "https://psekp.setjen.pertanian.go.id/web/",
@@ -59,33 +59,24 @@ if missing:
     st.error(f"Kolom berikut belum ada di Excel: {missing}")
     st.stop()
 
-# ================== UTIL PENCARIAN (untuk memilih konteks Excel) ==================
+# ================== UTILITAS PENCARIAN ==================
 def tokens_from_query(q: str):
-    """Ambil token alfanumerik (>=3 huruf/angka) dalam lowercase, tetapi abaikan kata pemicu seperti 'nip' agar tidak ikut dianggap sebagai nama."""
     raw = [t for t in re.split(r"[^a-zA-Z0-9]+", (q or "").lower()) if len(t) >= 3]
-    stop = {"nip"}  # bisa tambah: {'nrk','nik'} jika perlu
+    stop = {"nip"}
     return [t for t in raw if t not in stop]
 
 def search_all(query: str) -> pd.DataFrame:
-    """Kumpulkan baris relevan dari Excel berdasarkan:
-    - NIP lengkap (8–20 digit)
-    - Prefix NIP (2–17 digit) yang muncul di kalimat
-    - Nama (case-insensitive), termasuk pola khusus 'nip <nama>'
-    """
     q = (query or "").strip()
     ql = q.lower()
     out_idx = pd.Index([])
 
-    # siapkan kolom NIP tanpa spasi
     nip_series = df[COL["nip"]].astype(str).str.replace(r"\s", "", regex=True)
 
-    # 1) NIP lengkap
     full_nips = re.findall(r"\d{8,20}", ql)
     if full_nips:
         mask_full = nip_series.isin(full_nips)
         out_idx = out_idx.union(df[mask_full].index)
 
-    # 2) Prefix NIP (ambil SEMUA token angka 2–17 digit yang ada dalam kalimat)
     prefixes = re.findall(r"\b(\d{2,17})\b", ql)
     if prefixes:
         mask_pref = pd.Series(False, index=df.index)
@@ -93,47 +84,33 @@ def search_all(query: str) -> pd.DataFrame:
             mask_pref = mask_pref | nip_series.str.startswith(pref, na=False)
         out_idx = out_idx.union(df[mask_pref].index)
 
-    # 3) Nama
     base = df[COL["nama"]].fillna("").str.lower()
-    # a) Pola khusus 'nip <nama...>' -> ambil frasa setelah 'nip' sebagai fokus nama
     focus_tokens = []
     m = re.search(r"\bnip\s+([a-zA-Z][a-zA-Z\s\-']+)", ql)
     if m:
         focus_tokens = [t for t in re.split(r"[^a-zA-Z]+", m.group(1)) if len(t) >= 3]
-    # b) Token umum (sudah menghapus 'nip' via tokens_from_query)
     name_tokens = tokens_from_query(ql)
     mask_name = pd.Series(False, index=df.index)
-    # Prioritaskan token fokus dari pola 'nip <nama>'
     for t in focus_tokens:
         mask_name = mask_name | base.str.contains(t, na=False)
-    # Tambahkan token umum lainnya (hindari duplikasi)
     for t in [t for t in name_tokens if t not in focus_tokens]:
         mask_name = mask_name | base.str.contains(t, na=False)
     if mask_name.any():
         out_idx = out_idx.union(df[mask_name].index)
 
-    # kembalikan baris unik yang cocok
     return df.loc[out_idx].fillna("-")
 
 def build_llm_context(query: str, limit_rows: int = MAX_CONTEXT_ROWS) -> str:
     hits = search_all(query)
     ctx_df = hits[
         [
-            COL["nip"],
-            COL["nama"],
-            COL["jf"],
-            COL["js"],
-            COL["gol"],
-            COL["pang"],
-            COL["tmtj"],
-            COL["tmtg"],
-            COL["email"],
-            COL["hp"],
+            COL["nip"], COL["nama"], COL["jf"], COL["js"], COL["gol"],
+            COL["pang"], COL["tmtj"], COL["tmtg"], COL["email"], COL["hp"],
         ]
     ].head(limit_rows)
     return ctx_df.to_csv(index=False)
 
-# ================== WEBSITE (parsing tanpa tampilkan URL) ==================
+# ================== WEBSITE PARSER ==================
 @st.cache_data(show_spinner=False, ttl=3600)
 def fetch_url_text(url: str) -> str:
     try:
@@ -168,7 +145,6 @@ def web_snippets(query: str, urls=DEFAULT_URLS, max_snips=MAX_WEB_SNIPS):
         for p in top:
             if score_text(p) > 0:
                 snips.append(p)
-    # TANPA URL/DOMAIN
     snips = sorted(snips, key=score_text, reverse=True)[:max_snips]
     return snips
 
@@ -177,7 +153,6 @@ def ask_openrouter(prompt: str, temperature=0.35) -> str:
     api_key = st.secrets.get("OPENROUTER_API_KEY", "").strip()
     if not api_key:
         raise KeyError("❌ OPENROUTER_API_KEY belum diisi di Secrets.")
-
     model = st.secrets.get("OPENROUTER_MODEL", MODEL_DEFAULT)
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -186,11 +161,10 @@ def ask_openrouter(prompt: str, temperature=0.35) -> str:
         "Kamu asisten kepegawaian PSEKP yang ramah dan profesional.\n"
         "- Gaya bahasa alami seperti mengetik manual.\n"
         "- Jawaban harus berdasarkan konteks (Excel dan Website) yang diberikan.\n"
-        "- Jika ada banyak pegawai di konteks, tampilkan semuanya sebagai daftar berpoin "
-        "(Nama — NIP — Jabatan; JF lalu JS jika JF kosong) dan beri tag [Excel] tiap poin.\n"
-        "- Tambahkan penanda sumber di akhir kalimat fakta hanya: [Excel] atau [Web].\n"
+        "- Jika banyak pegawai, tampilkan daftar berpoin dengan tag [Excel].\n"
+        "- Tambahkan penanda sumber di akhir kalimat: [Excel] atau [Web].\n"
         "- Jika data tidak memadai, jawab 'data tidak tersedia'.\n"
-        "- Jangan menampilkan URL/domain."
+        "- Jangan tampilkan URL/domain."
     )
 
     payload = {
@@ -199,7 +173,7 @@ def ask_openrouter(prompt: str, temperature=0.35) -> str:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
         ],
-        "temperature": temperature,  # rendah -> patuh format (enumerasi)
+        "temperature": temperature,
     }
 
     resp = requests.post(url, headers=headers, json=payload, timeout=60)
@@ -207,36 +181,20 @@ def ask_openrouter(prompt: str, temperature=0.35) -> str:
         raise RuntimeError(f"Gagal: {resp.status_code} - {resp.text}")
     return resp.json()["choices"][0]["message"]["content"]
 
-# ================== UI ==================
+# ================== DETEKSI PERTANYAAN ORGANISASI ==================
 ORG_KEYWORDS = {
-    "tugas",
-    "fungsi",
-    "tupoksi",
-    "struktur",
-    "organisasi",
-    "visi",
-    "misi",
-    "layanan",
-    "sejarah",
-    "profil",
-    "mandat",
-    "peran",
-    "kewenangan",
-    "kebijakan",
+    "tugas","fungsi","tupoksi","struktur","organisasi","visi","misi",
+    "layanan","sejarah","profil","mandat","peran","kewenangan","kebijakan",
 }
-
 def is_org_question(q: str) -> bool:
     ql = (q or "").lower()
     return any(k in ql for k in ORG_KEYWORDS)
 
 # ================== INTRO SENA ==================
-import time
-
 if "sena_intro_done" not in st.session_state:
     st.session_state.sena_intro_done = False
 
 def typewriter(container, text, delay=0.05, style="###"):
-    """Menampilkan teks huruf demi huruf seperti efek mengetik."""
     typed = ""
     for char in text:
         typed += char
@@ -246,80 +204,105 @@ def typewriter(container, text, delay=0.05, style="###"):
 if not st.session_state.sena_intro_done:
     container1 = st.empty()
     container2 = st.empty()
-
-    # Teks intro
     intro_line1 = "Hai 👋, saya SENA, Asisten Cerdas PSEKP"
     intro_line2 = "Ada yang mau kamu ketahui tentang PSEKP dan Kepegawaiannya?"
-
-    # Efek mengetik baris pertama
     typewriter(container1, intro_line1, delay=0.05, style="###")
-
-    time.sleep(0.8)  # jeda sebelum baris kedua
-
-    # Efek mengetik baris kedua
+    time.sleep(0.8)
     typewriter(container2, intro_line2, delay=0.05, style="#####")
-
     st.session_state.sena_intro_done = True
     st.markdown("---")
 
-query = st.text_input(
-    "Tuliskan pertanyaanmu, lalu tekan Enter",
-    placeholder="contoh: 'Apa tugas PSEKP?', 'Siapa Restu?', 'NIP Frilla?'"
+# ================== INPUT DENGAN TOMBOL HIJAU ==================
+st.markdown(
+    """
+    <style>
+    .chat-box {
+        display: flex;
+        align-items: center;
+        background-color: #f8f9fa;
+        border-radius: 2rem;
+        border: 1px solid #ddd;
+        padding: 0.3rem 0.8rem;
+    }
+    .chat-box input[type="text"] {
+        border: none;
+        outline: none;
+        flex: 1;
+        background: transparent;
+        padding: 0.4rem;
+        font-size: 1rem;
+    }
+    .send-btn {
+        background-color: #16a34a;
+        border: none;
+        color: white;
+        border-radius: 50%;
+        width: 2.2rem;
+        height: 2.2rem;
+        font-size: 1.2rem;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .send-btn:hover {
+        background-color: #15803d;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
 )
 
+with st.form("chat_form", clear_on_submit=True):
+    st.markdown(
+        """
+        <div class="chat-box">
+            <input type="text" name="query" placeholder="Tulis pertanyaanmu di sini..." />
+            <button type="submit" class="send-btn">✈️</button>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+    submitted = st.form_submit_button("")
+
+query = st.session_state.get("query", "")
+if submitted:
+    query = query.strip() if query else ""
+
+# ================== PROSES JAWABAN ==================
 if query:
-    # 1) Bangun konteks dari Excel (kalau ada yang relevan) + deteksi tema organisasi
-    ctx_csv = build_llm_context(query, limit_rows=MAX_CONTEXT_ROWS)
+    ctx_csv = build_llm_context(query)
     has_excel = bool(ctx_csv.strip())
     org_mode = is_org_question(query)
-
-    # 2) Ambil snippet website (tanpa URL)
     web_snips = web_snippets(query, DEFAULT_URLS, MAX_WEB_SNIPS)
 
-    # 3) Satukan konteks
     parts = []
-    # HANYA pakai Excel bila ada hit dan pertanyaannya memang mengarah ke pegawai/NIP/nama
     if has_excel and not org_mode:
         parts.append("Sumber: [Excel]\n" + ctx_csv)
-    # Untuk tema organisasi, andalkan Web
     for para in web_snips:
         parts.append("Sumber: [Web]\n" + para)
-
     context_block = "\n\n---\n\n".join(parts) if parts else "(KONTEKS KOSONG)"
 
-    # 4) Susun prompt sesuai mode
     if has_excel and not org_mode:
-        # Mode pegawai: boleh enumerasi
         user_prompt = (
             "Gunakan gaya bahasa alami seperti mengetik manual.\n"
-            "Jika konteks berisi BANYAK pegawai, TAMPILKAN SEMUANYA sebagai daftar berpoin: "
-            "Nama — NIP — Jabatan (ambil JF lalu JS jika JF kosong) dan beri tag [Excel] tiap poin. "
-            "Setelah daftar, boleh tambahkan ringkasan singkat.\n\n"
-            f"KONTEKS TERKURASI (jangan tampilkan mentah):\n{context_block}\n\n"
-            f"PERTANYAAN:\n{query}"
+            "Jika banyak pegawai, tampilkan semua sebagai daftar berpoin.\n\n"
+            f"KONTEKS:\n{context_block}\n\nPERTANYAAN:\n{query}"
         )
         temp = 0.35
     else:
-        # Mode organisasi: fokus ke Web, jangan menampilkan daftar pegawai
         user_prompt = (
-            "Jawablah dengan bahasa alami, ringkas di awal lalu jelaskan seperlunya. "
-            "Fokus pada keterangan tugas/fungsi/struktur/layanan berdasarkan konteks dari Website. "
-            "JANGAN menampilkan daftar pegawai. "
-            "Tambahkan penanda sumber [Web] di akhir kalimat fakta. "
-            "Jika data tidak memadai, jawab 'data tidak tersedia'.\n\n"
-            f"KONTEKS TERKURASI (hanya ringkasan dari Website, tanpa URL):\n{context_block}\n\n"
-            f"PERTANYAAN:\n{query}"
+            "Jawablah dengan bahasa alami dan berdasarkan konteks Website.\n\n"
+            f"KONTEKS:\n{context_block}\n\nPERTANYAAN:\n{query}"
         )
-        temp = 0.4  # sedikit lebih bebas untuk narasi kebijakan
+        temp = 0.4
 
     try:
         with st.spinner("💬 Menyusun jawaban..."):
             answer = ask_openrouter(user_prompt, temperature=temp)
         st.success("Jawaban:")
-        st.write(answer if answer else "data tidak tersedia")
-
+        st.write(answer or "data tidak tersedia")
         with st.expander("🔎 Konteks yang digunakan (tanpa URL)"):
             st.code(context_block)
     except Exception as e:
         st.error(f"Gagal memanggil model: {e}")
-
