@@ -7,7 +7,8 @@ from bs4 import BeautifulSoup
 # ================== KONFIGURASI ==================
 st.set_page_config(page_title="PSEKP AI Chat", layout="centered")
 st.title("Selamat datang di **PSEKP AI Chat** 🤖")
-st.caption("Jawaban naratif berbasis Excel & Website resmi PSEKP (tanpa menampilkan URL).")
+st.caption("Jawaban naratif berbasis Excel & Website resmi PSEKP.")
+st.caption("Powered by OpenRouter")
 
 DATA_XLSX = Path("data/kepegawaian.xlsx")
 MODEL_DEFAULT = "meta-llama/llama-3-8b-instruct"  # bisa override via Secrets
@@ -170,7 +171,7 @@ def ask_openrouter(prompt: str, temperature=0.35) -> str:
 # ================== UI ==================
 query = st.text_input(
     "Tulis pertanyaan lalu tekan Enter",
-    placeholder="contoh: 'Siapa saja yang punya NIP 1990?', atau 'Apa tugas PSEKP?'"
+    placeholder="contoh: 'nip Restu?', atau 'tugas PSEKP?'"
 )
 
 if query:
@@ -206,3 +207,4 @@ if query:
             st.code(context_block)
     except Exception as e:
         st.error(f"Gagal memanggil model: {e}")
+
