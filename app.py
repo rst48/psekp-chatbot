@@ -177,7 +177,7 @@ def is_org_question(q: str) -> bool:
 
 query = st.text_input(
     "Tulis pertanyaan lalu tekan Enter",
-    placeholder="contoh: 'Apa tugas PSEKP?', 'Siapa jabatan Restu?', 'struktur PSEKP?'"
+    placeholder="contoh: 'Apa tugas PSEKP?', 'Siapa Restu?', 'struktur PSEKP?'"
 )
 
 if query:
@@ -235,3 +235,4 @@ if query:
             st.code(context_block)
     except Exception as e:
         st.error(f"Gagal memanggil model: {e}")
+
